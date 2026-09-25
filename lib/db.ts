@@ -34,9 +34,18 @@ create table if not exists settings (
   value text
 );
 
-create table if not exists contacts (
+create table if not exists ig_accounts (
   id serial primary key,
   ig_user_id text unique not null,
+  username text,
+  access_token text not null,
+  token_expira_em bigint,
+  created_at timestamptz default now()
+);
+
+create table if not exists contacts (
+  id serial primary key,
+  ig_user_id text not null,
   username text,
   tags text[] default '{}',
   email text,
@@ -95,6 +104,17 @@ create table if not exists message_queue (
   enviado boolean default false,
   created_at timestamptz default now()
 );
+
+-- Suporte a múltiplas contas: cada linha passa a pertencer a uma conta.
+alter table contacts add column if not exists account_id int references ig_accounts(id) on delete cascade;
+alter table automations add column if not exists account_id int references ig_accounts(id) on delete cascade;
+alter table events add column if not exists account_id int references ig_accounts(id) on delete cascade;
+alter table flows add column if not exists account_id int references ig_accounts(id) on delete cascade;
+
+-- O mesmo comentarista pode existir em contas diferentes, então o "único"
+-- passa a ser (conta + pessoa), não só a pessoa.
+alter table contacts drop constraint if exists contacts_ig_user_id_key;
+create unique index if not exists contacts_conta_pessoa_idx on contacts(account_id, ig_user_id);
 `;
 
 async function ensureSchema(): Promise<void> {
@@ -133,4 +153,51 @@ export async function setSetting(key: string, value: string): Promise<void> {
 
 export async function isDatabaseConfigured(): Promise<boolean> {
   return Boolean(connectionString);
+}
+
+export type ContaInstagram = {
+  id: number;
+  ig_user_id: string;
+  username: string | null;
+  access_token: string;
+  token_expira_em: string | null;
+};
+
+export async function listarContas(): Promise<ContaInstagram[]> {
+  return query<ContaInstagram>(
+    "select id, ig_user_id, username, access_token, token_expira_em from ig_accounts order by created_at asc"
+  );
+}
+
+export async function salvarOuAtualizarConta(params: {
+  igUserId: string;
+  username: string;
+  accessToken: string;
+  expiraEm: number;
+}): Promise<number> {
+  const [linha] = await query<{ id: number }>(
+    `insert into ig_accounts (ig_user_id, username, access_token, token_expira_em)
+     values ($1, $2, $3, $4)
+     on conflict (ig_user_id) do update set
+       username = excluded.username,
+       access_token = excluded.access_token,
+       token_expira_em = excluded.token_expira_em
+     returning id`,
+    [params.igUserId, params.username, params.accessToken, params.expiraEm]
+  );
+  return linha.id;
+}
+
+export async function getContaPorIgUserId(
+  igUserId: string
+): Promise<ContaInstagram | null> {
+  const linhas = await query<ContaInstagram>(
+    "select id, ig_user_id, username, access_token, token_expira_em from ig_accounts where ig_user_id = $1",
+    [igUserId]
+  );
+  return linhas[0] ?? null;
+}
+
+export async function desconectarConta(id: number): Promise<void> {
+  await query("delete from ig_accounts where id = $1", [id]);
 }

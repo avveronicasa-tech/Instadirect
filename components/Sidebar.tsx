@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -15,8 +16,10 @@ import {
   Plus,
   Check,
   LogOut,
+  ChevronDown,
 } from "lucide-react";
-import { contasConectadas } from "@/lib/mock-data";
+
+type Conta = { id: number; username: string | null; igUserId: string; ativa: boolean };
 
 const gerenciar = [
   { label: "Painel", icon: Home, href: "/" },
@@ -35,12 +38,35 @@ const sistema = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const [contas, setContas] = useState<Conta[]>([]);
+  const [menuAberto, setMenuAberto] = useState(false);
+  const [carregado, setCarregado] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/accounts")
+      .then((r) => r.json())
+      .then(setContas)
+      .finally(() => setCarregado(true));
+  }, [pathname]);
+
+  async function trocarConta(id: number) {
+    await fetch("/api/accounts/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setMenuAberto(false);
+    router.push("/");
+    router.refresh();
+  }
 
   async function sair() {
     await fetch("/api/logout", { method: "POST" });
     router.push("/login");
     router.refresh();
   }
+
+  const contaAtiva = contas.find((c) => c.ativa);
 
   return (
     <aside className="w-[300px] shrink-0 border-r border-brand-border bg-white flex flex-col h-screen sticky top-0">
@@ -102,21 +128,45 @@ export default function Sidebar() {
         </div>
       </nav>
 
-      <div className="px-3 pb-4 border-t border-brand-border pt-4 space-y-3">
-        {contasConectadas.map((conta) => (
-          <div
-            key={conta.handle}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200"
+      <div className="px-3 pb-4 border-t border-brand-border pt-4 space-y-3 relative">
+        {carregado && contaAtiva && (
+          <button
+            onClick={() => setMenuAberto((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50"
           >
             <span className="w-7 h-7 rounded-full bg-brand-purple text-white text-xs font-semibold flex items-center justify-center">
-              {conta.inicial}
+              {(contaAtiva.username || "?").charAt(0).toUpperCase()}
             </span>
-            <span className="text-sm font-medium flex-1 truncate">
-              {conta.handle}
+            <span className="text-sm font-medium flex-1 truncate text-left">
+              @{contaAtiva.username || contaAtiva.igUserId}
             </span>
-            {conta.conectada && <Check size={16} className="text-brand-purple" />}
+            <ChevronDown size={15} className="text-gray-400" />
+          </button>
+        )}
+
+        {carregado && !contaAtiva && (
+          <p className="px-3 text-xs text-gray-400">
+            Nenhuma conta do Instagram conectada ainda.
+          </p>
+        )}
+
+        {menuAberto && contas.length > 0 && (
+          <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+            {contas.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => trocarConta(c.id)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 text-left"
+              >
+                <span className="w-6 h-6 rounded-full bg-brand-purple text-white text-[10px] font-semibold flex items-center justify-center">
+                  {(c.username || "?").charAt(0).toUpperCase()}
+                </span>
+                <span className="flex-1 truncate">@{c.username || c.igUserId}</span>
+                {c.ativa && <Check size={14} className="text-brand-purple" />}
+              </button>
+            ))}
           </div>
-        ))}
+        )}
 
         <Link
           href="/setup"
@@ -138,7 +188,7 @@ export default function Sidebar() {
           Sair
         </button>
 
-        <p className="px-3 text-xs text-gray-400">Criado por Ricardo Tenório</p>
+        <p className="px-3 text-xs text-gray-400">Criado por Veronicasa</p>
       </div>
     </aside>
   );

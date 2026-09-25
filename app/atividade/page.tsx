@@ -1,5 +1,6 @@
 import Sidebar from "@/components/Sidebar";
 import { isDatabaseConfigured, query } from "@/lib/db";
+import { getContaAtiva } from "@/lib/active-account";
 
 type Evento = {
   tipo: string;
@@ -10,9 +11,12 @@ type Evento = {
 
 export default async function AtividadePage() {
   const dbPronto = await isDatabaseConfigured();
-  const eventos = dbPronto
+  const conta = dbPronto ? await getContaAtiva() : null;
+
+  const eventos = conta
     ? await query<Evento>(
-        "select tipo, username, ig_user_id, created_at from events order by created_at desc limit 200"
+        "select tipo, username, ig_user_id, created_at from events where account_id = $1 order by created_at desc limit 200",
+        [conta.id]
       )
     : [];
 
@@ -22,7 +26,8 @@ export default async function AtividadePage() {
       <main className="flex-1 px-10 py-8 max-w-[1000px]">
         <h1 className="text-2xl font-semibold mb-1">Atividade</h1>
         <p className="text-gray-500 text-sm mb-6">
-          Todo comentário, resposta de story ou DM que disparou uma automação.
+          Todo comentário, resposta de story ou DM que disparou uma automação
+          {conta ? ` em @${conta.username}` : ""}.
         </p>
 
         {eventos.length === 0 ? (

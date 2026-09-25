@@ -9,19 +9,12 @@ function gerarToken(tamanho = 24): string {
 }
 
 export async function GET() {
-  const [appId, verifyToken, username, userId] = await Promise.all([
+  const [appId, verifyToken] = await Promise.all([
     getSetting("ig_app_id"),
     getSetting("verify_token"),
-    getSetting("ig_username"),
-    getSetting("ig_user_id"),
   ]);
 
-  return NextResponse.json({
-    appId,
-    verifyToken,
-    contaConectada: Boolean(userId),
-    username,
-  });
+  return NextResponse.json({ appId, verifyToken });
 }
 
 export async function POST(req: NextRequest) {
@@ -37,7 +30,6 @@ export async function POST(req: NextRequest) {
   await setSetting("ig_app_id", appId);
   await setSetting("ig_app_secret", appSecret);
 
-  // Só gera um verify_token novo se ainda não existir um.
   const existente = await getSetting("verify_token");
   if (!existente) {
     await setSetting("verify_token", gerarToken());

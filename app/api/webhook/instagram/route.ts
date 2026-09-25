@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSetting, query } from "@/lib/db";
+import { getSetting, getContaPorIgUserId, query, type ContaInstagram } from "@/lib/db";
 import { verifySignature } from "@/lib/webhook-signature";
 import { replyToComment, sendMessage } from "@/lib/meta";
 
@@ -21,11 +21,11 @@ export async function GET(req: NextRequest) {
 }
 
 // 2) Toda vez que alguém comenta ou manda DM, a Meta faz um POST aqui.
+// O mesmo webhook recebe eventos de TODAS as contas conectadas — por isso
+// o primeiro passo é sempre descobrir de qual conta veio o evento.
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const appSecret = await getSetting("ig_app_secret");
-  const accessToken = await getSetting("ig_access_token");
-  const igUserId = await getSetting("ig_user_id");
 
   if (appSecret) {
     const valido = await verifySignature({
@@ -40,30 +40,30 @@ export async function POST(req: NextRequest) {
 
   const payload = JSON.parse(rawBody);
 
-  // A Meta agrupa vários eventos dentro de entry[].changes[] ou entry[].messaging[].
   for (const entry of payload.entry ?? []) {
-    // Comentário em post/reel.
+    // O "id" do entry é o ID da conta do Instagram dona do webhook —
+    // é assim que sabemos qual conta conectada deve responder.
+    const conta = entry.id ? await getContaPorIgUserId(entry.id) : null;
+    if (!conta) continue; // evento de uma conta que não está conectada aqui
+
     for (const change of entry.changes ?? []) {
       if (change.field === "comments") {
-        await tratarComentario(change.value, { accessToken, igUserId });
+        await tratarComentario(change.value, conta);
       }
     }
-    // DM recebida diretamente (inclui resposta a story).
     for (const evento of entry.messaging ?? []) {
       if (evento.message?.text) {
-        await tratarMensagemDireta(evento, { accessToken, igUserId });
+        await tratarMensagemDireta(evento, conta);
       }
     }
   }
 
-  // A Meta só se importa com o status 200 — o processamento de fato acontece
-  // acima, de forma síncrona, pra manter as coisas simples nesse estágio.
   return NextResponse.json({ ok: true });
 }
 
 async function tratarComentario(
   value: { text?: string; from?: { id: string; username?: string }; id?: string },
-  ctx: { accessToken: string | null; igUserId: string | null }
+  conta: ContaInstagram
 ) {
   const texto = (value.text || "").toLowerCase();
   const autor = value.from;
@@ -78,7 +78,9 @@ async function tratarComentario(
     botao_url: string | null;
     responder_comentario: boolean;
     comentario_texto: string | null;
-  }>("select * from automations where ativa = true");
+  }>("select * from automations where ativa = true and account_id = $1", [
+    conta.id,
+  ]);
 
   const encontrada = automacoes.find((a) => {
     const chave = a.palavra_chave.toLowerCase();
@@ -90,16 +92,21 @@ async function tratarComentario(
   if (!encontrada) return;
 
   await query(
-    `insert into events (tipo, ig_user_id, username, automation_id, payload)
-     values ('comentario', $1, $2, $3, $4)`,
-    [autor.id, autor.username ?? null, encontrada.id, JSON.stringify(value)]
+    `insert into contacts (ig_user_id, username, account_id)
+     values ($1, $2, $3)
+     on conflict (account_id, ig_user_id) do update set username = excluded.username`,
+    [autor.id, autor.username ?? null, conta.id]
   );
 
-  if (!ctx.accessToken || !ctx.igUserId) return;
+  await query(
+    `insert into events (tipo, ig_user_id, username, automation_id, payload, account_id)
+     values ('comentario', $1, $2, $3, $4, $5)`,
+    [autor.id, autor.username ?? null, encontrada.id, JSON.stringify(value), conta.id]
+  );
 
   if (encontrada.responder_comentario && value.id && encontrada.comentario_texto) {
     await replyToComment({
-      accessToken: ctx.accessToken,
+      accessToken: conta.access_token,
       commentId: value.id,
       text: encontrada.comentario_texto,
     }).catch(() => null);
@@ -108,8 +115,8 @@ async function tratarComentario(
   // A resposta ao comentário "fura" a janela de 24h (permitida 1x por comentário,
   // até 7 dias) — é assim que a pessoa recebe a primeira DM sem ter escrito antes.
   await sendMessage({
-    accessToken: ctx.accessToken,
-    igUserId: ctx.igUserId,
+    accessToken: conta.access_token,
+    igUserId: conta.ig_user_id,
     recipientId: autor.id,
     text: encontrada.dm_texto,
     buttonText: encontrada.botao_texto ?? undefined,
@@ -118,11 +125,8 @@ async function tratarComentario(
 }
 
 async function tratarMensagemDireta(
-  evento: {
-    sender?: { id: string };
-    message?: { text?: string };
-  },
-  ctx: { accessToken: string | null; igUserId: string | null }
+  evento: { sender?: { id: string }; message?: { text?: string } },
+  conta: ContaInstagram
 ) {
   const texto = (evento.message?.text || "").toLowerCase();
   const remetente = evento.sender?.id;
@@ -135,7 +139,9 @@ async function tratarMensagemDireta(
     dm_texto: string;
     botao_texto: string | null;
     botao_url: string | null;
-  }>("select * from automations where ativa = true");
+  }>("select * from automations where ativa = true and account_id = $1", [
+    conta.id,
+  ]);
 
   const encontrada = automacoes.find((a) => {
     const chave = a.palavra_chave.toLowerCase();
@@ -147,16 +153,21 @@ async function tratarMensagemDireta(
   if (!encontrada) return;
 
   await query(
-    `insert into events (tipo, ig_user_id, automation_id, payload)
-     values ('dm', $1, $2, $3)`,
-    [remetente, encontrada.id, JSON.stringify(evento)]
+    `insert into contacts (ig_user_id, account_id)
+     values ($1, $2)
+     on conflict (account_id, ig_user_id) do nothing`,
+    [remetente, conta.id]
   );
 
-  if (!ctx.accessToken || !ctx.igUserId) return;
+  await query(
+    `insert into events (tipo, ig_user_id, automation_id, payload, account_id)
+     values ('dm', $1, $2, $3, $4)`,
+    [remetente, encontrada.id, JSON.stringify(evento), conta.id]
+  );
 
   await sendMessage({
-    accessToken: ctx.accessToken,
-    igUserId: ctx.igUserId,
+    accessToken: conta.access_token,
+    igUserId: conta.ig_user_id,
     recipientId: remetente,
     text: encontrada.dm_texto,
     buttonText: encontrada.botao_texto ?? undefined,

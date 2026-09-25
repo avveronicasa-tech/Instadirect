@@ -1,7 +1,8 @@
 import { Users, Send, Zap, AlertTriangle, ArrowUpRight } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import StatCard from "@/components/StatCard";
-import { isDatabaseConfigured, query, getSetting } from "@/lib/db";
+import { isDatabaseConfigured, query } from "@/lib/db";
+import { getContaAtiva } from "@/lib/active-account";
 
 type Evento = {
   tipo: string;
@@ -20,33 +21,28 @@ function tempoRelativo(data: string): string {
 
 export default async function PainelPage() {
   const dbPronto = await isDatabaseConfigured();
+  const conta = dbPronto ? await getContaAtiva() : null;
 
-  let username = "sua conta";
-  let contaConectada = false;
   let pessoasAlcancadas = 0;
   let automacoesAtivas = 0;
   let eventos: Evento[] = [];
 
-  if (dbPronto) {
-    const [usernameSetting, igUserId] = await Promise.all([
-      getSetting("ig_username"),
-      getSetting("ig_user_id"),
-    ]);
-    username = usernameSetting || "sua conta";
-    contaConectada = Boolean(igUserId);
-
+  if (conta) {
     const [contagemPessoas] = await query<{ total: string }>(
-      "select count(distinct ig_user_id) as total from events"
+      "select count(*) as total from contacts where account_id = $1",
+      [conta.id]
     );
     pessoasAlcancadas = Number(contagemPessoas?.total || 0);
 
     const [contagemAutomacoes] = await query<{ total: string }>(
-      "select count(*) as total from automations where ativa = true"
+      "select count(*) as total from automations where ativa = true and account_id = $1",
+      [conta.id]
     );
     automacoesAtivas = Number(contagemAutomacoes?.total || 0);
 
     eventos = await query<Evento>(
-      "select tipo, username, ig_user_id, created_at from events order by created_at desc limit 7"
+      "select tipo, username, ig_user_id, created_at from events where account_id = $1 order by created_at desc limit 7",
+      [conta.id]
     );
   }
 
@@ -59,14 +55,14 @@ export default async function PainelPage() {
           <div>
             <h1 className="text-2xl font-semibold">Painel</h1>
             <p className="text-gray-500 text-sm mt-1">
-              Visão geral de @{username}
+              Visão geral de {conta ? `@${conta.username}` : "—"}
             </p>
           </div>
           <a
             href="/setup"
             className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50"
           >
-            {contaConectada ? "Reconectar" : "Conectar"}
+            {conta ? "Gerenciar contas" : "Conectar"}
           </a>
         </div>
 
@@ -78,33 +74,41 @@ export default async function PainelPage() {
           </div>
         )}
 
-        {/* Card da conta */}
-        <div className="card p-5 flex items-center gap-4 mb-6">
-          <span className="w-11 h-11 rounded-full bg-brand-purple text-white text-lg font-semibold flex items-center justify-center shrink-0">
-            {username.charAt(0).toUpperCase()}
-          </span>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold">@{username}</span>
-              <span className="text-xs font-medium bg-[var(--amber-bg)] text-[var(--amber-text)] px-2 py-0.5 rounded-full">
-                {automacoesAtivas > 0
-                  ? `${automacoesAtivas} automação(ões) ativa(s)`
-                  : "Nenhuma automação ativa"}
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 mt-0.5">
-              {contaConectada
-                ? "Crie uma automação (ou um fluxo) para o robô começar a responder por você."
-                : "Conecte sua conta do Instagram em Configuração para começar."}
-            </p>
+        {dbPronto && !conta && (
+          <div className="card p-4 mb-6 bg-amber-50 border-amber-200 text-sm text-amber-800">
+            Nenhuma conta do Instagram conectada ainda. Vá em{" "}
+            <strong>Configuração</strong> pra conectar a primeira.
           </div>
-          <a
-            href="/automacoes"
-            className="px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 whitespace-nowrap"
-          >
-            Criar automação
-          </a>
-        </div>
+        )}
+
+        {/* Card da conta */}
+        {conta && (
+          <div className="card p-5 flex items-center gap-4 mb-6">
+            <span className="w-11 h-11 rounded-full bg-brand-purple text-white text-lg font-semibold flex items-center justify-center shrink-0">
+              {(conta.username || "?").charAt(0).toUpperCase()}
+            </span>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold">@{conta.username}</span>
+                <span className="text-xs font-medium bg-[var(--amber-bg)] text-[var(--amber-text)] px-2 py-0.5 rounded-full">
+                  {automacoesAtivas > 0
+                    ? `${automacoesAtivas} automação(ões) ativa(s)`
+                    : "Nenhuma automação ativa"}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Crie uma automação (ou um fluxo) para o robô começar a
+                responder por essa conta.
+              </p>
+            </div>
+            <a
+              href="/automacoes"
+              className="px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 whitespace-nowrap"
+            >
+              Criar automação
+            </a>
+          </div>
+        )}
 
         {/* Cards de estatísticas */}
         <div className="grid grid-cols-4 gap-4 mb-6">

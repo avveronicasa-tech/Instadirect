@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSetting, setSetting } from "@/lib/db";
+import { getSetting, salvarOuAtualizarConta } from "@/lib/db";
+import { CONTA_ATIVA_COOKIE } from "@/lib/active-account";
 import {
   exchangeCodeForToken,
   exchangeForLongLivedToken,
@@ -47,15 +48,24 @@ export async function GET(req: NextRequest) {
 
     const perfil = await getProfile(longo.access_token);
 
-    await setSetting("ig_access_token", longo.access_token);
-    await setSetting("ig_user_id", perfil.user_id);
-    await setSetting("ig_username", perfil.username);
-    await setSetting(
-      "ig_token_expira_em",
-      String(Date.now() + longo.expires_in * 1000)
-    );
+    // Salva (ou atualiza, se já existir) essa conta na lista de contas
+    // conectadas — nunca sobrescreve as outras.
+    const contaId = await salvarOuAtualizarConta({
+      igUserId: perfil.user_id,
+      username: perfil.username,
+      accessToken: longo.access_token,
+      expiraEm: Date.now() + longo.expires_in * 1000,
+    });
 
-    return NextResponse.redirect(new URL("/?conectado=1", req.url));
+    const res = NextResponse.redirect(new URL("/?conectado=1", req.url));
+    // A conta que acabou de ser conectada já vira a conta ativa.
+    res.cookies.set(CONTA_ATIVA_COOKIE, String(contaId), {
+      httpOnly: false,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+    return res;
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Erro desconhecido";
     return NextResponse.redirect(

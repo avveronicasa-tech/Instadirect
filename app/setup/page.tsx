@@ -3,28 +3,32 @@
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import CopyField from "@/components/CopyField";
-import { CheckCircle2, ExternalLink } from "lucide-react";
+import { CheckCircle2, ExternalLink, Plus, Trash2 } from "lucide-react";
+
+type Conta = { id: number; username: string | null; igUserId: string; ativa: boolean };
 
 export default function SetupPage() {
   const [origin, setOrigin] = useState("");
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const [verifyToken, setVerifyToken] = useState<string | null>(null);
-  const [contaConectada, setContaConectada] = useState(false);
-  const [username, setUsername] = useState<string | null>(null);
+  const [contas, setContas] = useState<Conta[]>([]);
   const [salvando, setSalvando] = useState(false);
   const [mensagem, setMensagem] = useState<string | null>(null);
 
+  async function carregarTudo() {
+    const [credenciais, listaContas] = await Promise.all([
+      fetch("/api/setup/credentials").then((r) => r.json()),
+      fetch("/api/accounts").then((r) => r.json()),
+    ]);
+    setAppId(credenciais.appId || "");
+    setVerifyToken(credenciais.verifyToken);
+    setContas(listaContas);
+  }
+
   useEffect(() => {
     setOrigin(window.location.origin);
-    fetch("/api/setup/credentials")
-      .then((r) => r.json())
-      .then((data) => {
-        setAppId(data.appId || "");
-        setVerifyToken(data.verifyToken);
-        setContaConectada(data.contaConectada);
-        setUsername(data.username);
-      });
+    carregarTudo();
 
     const erro = new URLSearchParams(window.location.search).get("erro");
     if (erro) setMensagem(`Erro: ${decodeURIComponent(erro)}`);
@@ -45,12 +49,28 @@ export default function SetupPage() {
         setMensagem(data.erro || "Não foi possível salvar.");
         return;
       }
-      setMensagem("Credenciais salvas. Agora cadastre as URLs abaixo no painel da Meta.");
-      const check = await fetch("/api/setup/credentials").then((r) => r.json());
-      setVerifyToken(check.verifyToken);
+      setMensagem(
+        "Credenciais salvas. Agora cadastre as URLs abaixo no painel da Meta."
+      );
+      await carregarTudo();
     } finally {
       setSalvando(false);
     }
+  }
+
+  async function tornarAtiva(id: number) {
+    await fetch("/api/accounts/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    await carregarTudo();
+  }
+
+  async function desconectar(id: number, username: string | null) {
+    if (!confirm(`Desconectar @${username || "essa conta"} do InstaDirect?`)) return;
+    await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+    await carregarTudo();
   }
 
   const webhookUrl = origin ? `${origin}/api/webhook/instagram` : "";
@@ -62,17 +82,9 @@ export default function SetupPage() {
       <main className="flex-1 px-10 py-8 max-w-[860px]">
         <h1 className="text-2xl font-semibold mb-1">Configuração</h1>
         <p className="text-gray-500 text-sm mb-6">
-          Conecte o app do Instagram em 3 passos.
+          O app da Meta é configurado uma vez só. Depois, conecte quantas
+          contas do Instagram quiser.
         </p>
-
-        {contaConectada && (
-          <div className="card p-4 mb-6 flex items-center gap-3 bg-emerald-50 border-emerald-200">
-            <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
-            <p className="text-sm text-emerald-800">
-              Conta <strong>@{username}</strong> já está conectada.
-            </p>
-          </div>
-        )}
 
         {mensagem && (
           <div className="card p-4 mb-6 text-sm text-gray-700">{mensagem}</div>
@@ -80,7 +92,7 @@ export default function SetupPage() {
 
         {/* Passo 1 */}
         <section className="card p-6 mb-5">
-          <h2 className="font-semibold mb-1">1. Crie o app na Meta</h2>
+          <h2 className="font-semibold mb-1">1. Crie o app na Meta (uma vez só)</h2>
           <p className="text-sm text-gray-500 mb-4">
             Abra{" "}
             <a
@@ -91,8 +103,7 @@ export default function SetupPage() {
               developers.facebook.com/apps/creation <ExternalLink size={12} />
             </a>{" "}
             e escolha o caso de uso <strong>“Gerencie mensagens e conteúdo no Instagram”</strong>.
-            Depois copie o <strong>ID do app do Instagram</strong> e a{" "}
-            <strong>chave secreta</strong> nas configurações do app e cole abaixo.
+            Copie o <strong>ID do app</strong> e a <strong>chave secreta</strong> e cole abaixo.
           </p>
 
           <form onSubmit={salvarCredenciais} className="space-y-3">
@@ -149,23 +160,72 @@ export default function SetupPage() {
           </p>
         </section>
 
-        {/* Passo 3 */}
+        {/* Passo 3 — contas */}
         <section className="card p-6">
-          <h2 className="font-semibold mb-1">3. Conecte sua conta</h2>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="font-semibold">3. Contas conectadas</h2>
+            <a
+              href="/api/oauth/instagram/authorize"
+              className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg ${
+                appId
+                  ? "bg-brand-purple text-white hover:opacity-90"
+                  : "bg-gray-200 text-gray-400 pointer-events-none"
+              }`}
+            >
+              <Plus size={14} /> Conectar nova conta
+            </a>
+          </div>
           <p className="text-sm text-gray-500 mb-4">
-            Adicione sua conta como Testador do Instagram nas Funções do app,
-            aceite o convite no celular e clique no botão abaixo.
+            Pra conectar outra conta, faça login nela no Instagram desse
+            mesmo dispositivo/navegador e clique em “Conectar nova conta”.
+            Ela é adicionada à lista, sem remover as demais.
           </p>
-          <a
-            href="/api/oauth/instagram/authorize"
-            className={`inline-block px-4 py-2 text-sm font-medium rounded-lg ${
-              appId
-                ? "bg-brand-purple text-white hover:opacity-90"
-                : "bg-gray-200 text-gray-400 pointer-events-none"
-            }`}
-          >
-            Conectar Instagram
-          </a>
+
+          {contas.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4 text-center">
+              Nenhuma conta conectada ainda.
+            </p>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {contas.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center justify-between py-3"
+                >
+                  <div className="flex items-center gap-2">
+                    {c.ativa && (
+                      <CheckCircle2 size={16} className="text-emerald-600" />
+                    )}
+                    <span className="text-sm font-medium">
+                      @{c.username || c.igUserId}
+                    </span>
+                    {c.ativa && (
+                      <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">
+                        ativa no painel
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {!c.ativa && (
+                      <button
+                        onClick={() => tornarAtiva(c.id)}
+                        className="text-xs font-medium text-brand-purple hover:underline"
+                      >
+                        Usar essa conta
+                      </button>
+                    )}
+                    <button
+                      onClick={() => desconectar(c.id, c.username)}
+                      className="p-1.5 text-gray-400 hover:text-red-600"
+                      title="Desconectar"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </main>
     </div>

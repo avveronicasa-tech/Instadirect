@@ -1,5 +1,6 @@
 import Sidebar from "@/components/Sidebar";
 import { isDatabaseConfigured, query } from "@/lib/db";
+import { getContaAtiva } from "@/lib/active-account";
 
 type Contato = {
   username: string | null;
@@ -10,9 +11,12 @@ type Contato = {
 
 export default async function ContatosPage() {
   const dbPronto = await isDatabaseConfigured();
-  const contatos = dbPronto
+  const conta = dbPronto ? await getContaAtiva() : null;
+
+  const contatos = conta
     ? await query<Contato>(
-        "select username, ig_user_id, tags, created_at from contacts order by created_at desc limit 100"
+        "select username, ig_user_id, tags, created_at from contacts where account_id = $1 order by created_at desc limit 100",
+        [conta.id]
       )
     : [];
 
@@ -22,7 +26,8 @@ export default async function ContatosPage() {
       <main className="flex-1 px-10 py-8 max-w-[1000px]">
         <h1 className="text-2xl font-semibold mb-1">Contatos</h1>
         <p className="text-gray-500 text-sm mb-6">
-          Pessoas que já comentaram, responderam story ou mandaram DM.
+          Pessoas que já comentaram, responderam story ou mandaram DM
+          {conta ? ` para @${conta.username}` : ""}.
         </p>
 
         {contatos.length === 0 ? (
