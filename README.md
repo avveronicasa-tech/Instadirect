@@ -8,17 +8,24 @@ usando a API oficial da Meta. Rodando na sua própria conta Vercel + Neon.
 - Login por senha (`ADMIN_PASSWORD`), protegendo todo o painel.
 - Banco de dados Postgres (Neon), com as tabelas criadas automaticamente.
 - Assistente em **Configuração** (`/setup`): cadastro do ID/chave do app da
-  Meta, geração do token de verificação, URLs prontas pra copiar (webhook,
-  redirect OAuth) e botão para conectar a conta do Instagram.
+  Meta (uma vez só) + lista de **contas do Instagram conectadas**, com botão
+  pra adicionar quantas quiser e trocar a conta ativa.
+- **Múltiplas contas**: cada conta conectada guarda seu próprio token. O
+  seletor na barra lateral troca qual conta está "ativa" no painel — as
+  automações, contatos e eventos são sempre isolados por conta.
 - Webhook (`/api/webhook/instagram`): valida a assinatura HMAC da Meta,
-  recebe comentários e DMs, casa com a palavra-chave de uma automação ativa
-  e responde automaticamente (resposta pública opcional no comentário +
-  DM com botão de link).
+  descobre de qual conta conectada veio cada evento, casa com a
+  palavra-chave de uma automação ativa daquela conta e responde
+  automaticamente (resposta pública opcional no comentário + DM com botão
+  de link).
 - OAuth completo: autorizar → trocar code por token → token de longa
-  duração → salvar conta conectada.
-- Cron diário (`vercel.json`) que renova o token antes de expirar.
-- **Automações** (`/automacoes`): criar, ativar/pausar e excluir.
-- **Contatos** e **Atividade**: mostram dados reais do banco.
+  duração → salvar/atualizar a conta na lista, sem apagar as outras.
+- Cron diário (`vercel.json`) que renova o token de todas as contas
+  conectadas.
+- **Automações** (`/automacoes`): criar, ativar/pausar e excluir — sempre
+  na conta ativa.
+- **Contatos** e **Atividade**: mostram dados reais, filtrados pela conta
+  ativa.
 - Páginas de Política de Privacidade e Termos (exigidas pela Meta).
 
 ## O que ainda falta (próximas etapas)
