@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/refresh-token",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/flow-resume",
+      "schedule": "0 4 * * *"
     }
   ]
 }
