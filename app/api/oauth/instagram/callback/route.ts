@@ -5,6 +5,7 @@ import {
   exchangeCodeForToken,
   exchangeForLongLivedToken,
   getProfile,
+  subscribeToWebhooks,
 } from "@/lib/meta";
 
 export async function GET(req: NextRequest) {
@@ -57,7 +58,19 @@ export async function GET(req: NextRequest) {
       expiraEm: Date.now() + longo.expires_in * 1000,
     });
 
-    const res = NextResponse.redirect(new URL("/?conectado=1", req.url));
+    // Assina a conta nos eventos (comments e messages). Se falhar, a conta
+    // fica conectada mas avisamos, porque sem isso nada chega.
+    let destino = "/?conectado=1";
+    try {
+      await subscribeToWebhooks({ accessToken: longo.access_token });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "erro desconhecido";
+      destino = `/setup?erro=${encodeURIComponent(
+        `Conta conectada, mas não foi possível ativar o recebimento de eventos. ${msg}`
+      )}`;
+    }
+
+    const res = NextResponse.redirect(new URL(destino, req.url));
     // A conta que acabou de ser conectada já vira a conta ativa.
     res.cookies.set(CONTA_ATIVA_COOKIE, String(contaId), {
       httpOnly: false,

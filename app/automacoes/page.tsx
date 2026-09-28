@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, X, Pencil } from "lucide-react";
 
 type Automacao = {
   id: number;
@@ -12,13 +12,16 @@ type Automacao = {
   dm_texto: string;
   botao_texto: string | null;
   botao_url: string | null;
+  responder_comentario: boolean;
+  comentario_texto: string | null;
   ativa: boolean;
 };
 
 export default function AutomacoesPage() {
   const [automacoes, setAutomacoes] = useState<Automacao[]>([]);
   const [carregando, setCarregando] = useState(true);
-  const [modalAberto, setModalAberto] = useState(false);
+  // null = modal fechado | "nova" = criando | Automacao = editando
+  const [modal, setModal] = useState<null | "nova" | Automacao>(null);
 
   async function carregar() {
     setCarregando(true);
@@ -60,7 +63,7 @@ export default function AutomacoesPage() {
             </p>
           </div>
           <button
-            onClick={() => setModalAberto(true)}
+            onClick={() => setModal("nova")}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800"
           >
             <Plus size={16} /> Nova automação
@@ -80,13 +83,17 @@ export default function AutomacoesPage() {
                 key={a.id}
                 className="flex items-center justify-between px-5 py-4"
               >
-                <div>
+                <button
+                  onClick={() => setModal(a)}
+                  className="flex-1 text-left"
+                  title="Clique para editar"
+                >
                   <p className="font-medium text-sm">{a.nome}</p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Gatilho: <code>{a.palavra_chave}</code> (
                     {a.tipo_correspondencia === "exata" ? "exata" : "contém"})
                   </p>
-                </div>
+                </button>
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
                     <input
@@ -97,8 +104,16 @@ export default function AutomacoesPage() {
                     {a.ativa ? "Ativa" : "Pausada"}
                   </label>
                   <button
+                    onClick={() => setModal(a)}
+                    className="p-2 text-gray-400 hover:text-gray-700"
+                    title="Editar"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
                     onClick={() => excluir(a.id)}
                     className="p-2 text-gray-400 hover:text-red-600"
+                    title="Excluir"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -108,11 +123,12 @@ export default function AutomacoesPage() {
           </div>
         )}
 
-        {modalAberto && (
-          <ModalNovaAutomacao
-            onClose={() => setModalAberto(false)}
-            onCriada={() => {
-              setModalAberto(false);
+        {modal && (
+          <ModalAutomacao
+            automacao={modal === "nova" ? null : modal}
+            onClose={() => setModal(null)}
+            onSalva={() => {
+              setModal(null);
               carregar();
             }}
           />
@@ -122,20 +138,27 @@ export default function AutomacoesPage() {
   );
 }
 
-function ModalNovaAutomacao({
+function ModalAutomacao({
+  automacao,
   onClose,
-  onCriada,
+  onSalva,
 }: {
+  automacao: Automacao | null;
   onClose: () => void;
-  onCriada: () => void;
+  onSalva: () => void;
 }) {
-  const [nome, setNome] = useState("");
-  const [palavraChave, setPalavraChave] = useState("");
-  const [dmTexto, setDmTexto] = useState("");
-  const [botaoTexto, setBotaoTexto] = useState("Quero saber mais");
-  const [botaoUrl, setBotaoUrl] = useState("");
+  const editando = automacao !== null;
+
+  const [nome, setNome] = useState(automacao?.nome ?? "");
+  const [palavraChave, setPalavraChave] = useState(automacao?.palavra_chave ?? "");
+  const [tipo, setTipo] = useState(automacao?.tipo_correspondencia ?? "contem");
+  const [dmTexto, setDmTexto] = useState(automacao?.dm_texto ?? "");
+  const [botaoTexto, setBotaoTexto] = useState(
+    editando ? automacao?.botao_texto ?? "" : "Quero saber mais"
+  );
+  const [botaoUrl, setBotaoUrl] = useState(automacao?.botao_url ?? "");
   const [comentarioTexto, setComentarioTexto] = useState(
-    "Te mandei no privado! 📩"
+    editando ? automacao?.comentario_texto ?? "" : "Te mandei no privado! 📩"
   );
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -144,33 +167,42 @@ function ModalNovaAutomacao({
     e.preventDefault();
     setSalvando(true);
     setErro(null);
-    const res = await fetch("/api/automations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        nome,
-        palavra_chave: palavraChave,
-        dm_texto: dmTexto,
-        botao_texto: botaoTexto,
-        botao_url: botaoUrl,
-        responder_comentario: true,
-        comentario_texto: comentarioTexto,
-      }),
-    });
+
+    const corpo = {
+      nome,
+      palavra_chave: palavraChave,
+      tipo_correspondencia: tipo,
+      dm_texto: dmTexto,
+      botao_texto: botaoTexto,
+      botao_url: botaoUrl,
+      responder_comentario: comentarioTexto.trim() !== "",
+      comentario_texto: comentarioTexto,
+    };
+
+    const res = await fetch(
+      editando ? `/api/automations/${automacao!.id}` : "/api/automations",
+      {
+        method: editando ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(corpo),
+      }
+    );
     setSalvando(false);
     if (!res.ok) {
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       setErro(data.erro || "Não foi possível salvar.");
       return;
     }
-    onCriada();
+    onSalva();
   }
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-lg">Nova automação</h2>
+          <h2 className="font-semibold text-lg">
+            {editando ? "Editar automação" : "Nova automação"}
+          </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
             <X size={20} />
           </button>
@@ -189,21 +221,36 @@ function ModalNovaAutomacao({
               required
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
-              Palavra-chave (o que a pessoa comenta ou manda na DM)
-            </label>
-            <input
-              value={palavraChave}
-              onChange={(e) => setPalavraChave(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              placeholder="Ex: quero"
-              required
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Palavra-chave
+              </label>
+              <input
+                value={palavraChave}
+                onChange={(e) => setPalavraChave(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="Ex: quero"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Quando dispara
+              </label>
+              <select
+                value={tipo}
+                onChange={(e) => setTipo(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="contem">Se contiver a palavra</option>
+                <option value="exata">Só se for igual</option>
+              </select>
+            </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">
-              Resposta pública no comentário (opcional)
+              Resposta pública no comentário (deixe vazio para não responder)
             </label>
             <input
               value={comentarioTexto}
@@ -255,7 +302,11 @@ function ModalNovaAutomacao({
             disabled={salvando}
             className="w-full bg-gray-900 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-gray-800 disabled:opacity-50"
           >
-            {salvando ? "Salvando..." : "Criar automação"}
+            {salvando
+              ? "Salvando..."
+              : editando
+              ? "Salvar alterações"
+              : "Criar automação"}
           </button>
         </form>
       </div>

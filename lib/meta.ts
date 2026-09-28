@@ -107,25 +107,45 @@ export async function sendMessage(params: {
   text?: string;
   buttonText?: string;
   buttonUrl?: string;
+  quickReplies?: { title: string; payload: string }[];
+  // Se vier, a mensagem é uma "resposta privada" a um comentário. É o único
+  // jeito de mandar a 1ª DM pra quem ainda não escreveu pra você: vale 1 vez
+  // por comentário, em até 7 dias.
+  commentId?: string;
 }): Promise<void> {
-  const message = params.buttonUrl
-    ? {
-        attachment: {
-          type: "template",
-          payload: {
-            template_type: "button",
-            text: params.text || "",
-            buttons: [
-              {
-                type: "web_url",
-                url: params.buttonUrl,
-                title: params.buttonText || "Abrir link",
-              },
-            ],
-          },
+  let message: Record<string, unknown>;
+
+  if (params.quickReplies && params.quickReplies.length > 0) {
+    // Botões clicáveis de verdade — até 13, 20 caracteres cada (a API trunca
+    // sozinha se passar disso).
+    message = {
+      text: params.text || "",
+      quick_replies: params.quickReplies.slice(0, 13).map((q) => ({
+        content_type: "text",
+        title: q.title.slice(0, 20),
+        payload: q.payload,
+      })),
+    };
+  } else if (params.buttonUrl) {
+    message = {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "button",
+          text: params.text || "",
+          buttons: [
+            {
+              type: "web_url",
+              url: params.buttonUrl,
+              title: params.buttonText || "Abrir link",
+            },
+          ],
         },
-      }
-    : { text: params.text || "" };
+      },
+    };
+  } else {
+    message = { text: params.text || "" };
+  }
 
   const url = new URL(
     `https://graph.instagram.com/${GRAPH_VERSION}/${params.igUserId}/messages`
@@ -135,7 +155,12 @@ export async function sendMessage(params: {
   const res = await fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recipient: { id: params.recipientId }, message }),
+    body: JSON.stringify({
+      recipient: params.commentId
+        ? { comment_id: params.commentId }
+        : { id: params.recipientId },
+      message,
+    }),
   });
 
   if (!res.ok) {
@@ -161,5 +186,23 @@ export async function replyToComment(params: {
 
   if (!res.ok) {
     throw new Error(`Falha ao responder comentário: ${await res.text()}`);
+  }
+}
+
+// Cadastrar a URL do webhook na Meta NÃO basta: cada conta conectada também
+// precisa ser "assinada" nos campos que queremos receber. Sem isso, a Meta
+// não manda nenhum comentário nem DM daquela conta.
+export async function subscribeToWebhooks(params: {
+  accessToken: string;
+}): Promise<void> {
+  const url = new URL(
+    `https://graph.instagram.com/${GRAPH_VERSION}/me/subscribed_apps`
+  );
+  url.searchParams.set("subscribed_fields", "comments,messages");
+  url.searchParams.set("access_token", params.accessToken);
+
+  const res = await fetch(url.toString(), { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Falha ao assinar os eventos: ${await res.text()}`);
   }
 }

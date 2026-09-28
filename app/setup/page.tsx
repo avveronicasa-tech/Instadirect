@@ -67,6 +67,17 @@ export default function SetupPage() {
     await carregarTudo();
   }
 
+  async function ativarEventos(id: number) {
+    setMensagem(null);
+    const res = await fetch(`/api/accounts/${id}/subscribe`, { method: "POST" });
+    const data = await res.json();
+    setMensagem(
+      res.ok
+        ? "Eventos ativados! Agora comentários e DMs dessa conta chegam no InstaDirect."
+        : `Não foi possível ativar os eventos: ${data.erro}`
+    );
+  }
+
   async function desconectar(id: number, username: string | null) {
     if (!confirm(`Desconectar @${username || "essa conta"} do InstaDirect?`)) return;
     await fetch(`/api/accounts/${id}`, { method: "DELETE" });
@@ -206,6 +217,12 @@ export default function SetupPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => ativarEventos(c.id)}
+                      className="text-xs font-medium text-gray-600 border border-gray-300 rounded-lg px-2 py-1 hover:bg-gray-50"
+                    >
+                      Ativar eventos
+                    </button>
                     {!c.ativa && (
                       <button
                         onClick={() => tornarAtiva(c.id)}

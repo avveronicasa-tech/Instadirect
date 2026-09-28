@@ -110,11 +110,15 @@ alter table contacts add column if not exists account_id int references ig_accou
 alter table automations add column if not exists account_id int references ig_accounts(id) on delete cascade;
 alter table events add column if not exists account_id int references ig_accounts(id) on delete cascade;
 alter table flows add column if not exists account_id int references ig_accounts(id) on delete cascade;
+alter table flow_runs add column if not exists account_id int references ig_accounts(id) on delete cascade;
 
 -- O mesmo comentarista pode existir em contas diferentes, então o "único"
 -- passa a ser (conta + pessoa), não só a pessoa.
 alter table contacts drop constraint if exists contacts_ig_user_id_key;
 create unique index if not exists contacts_conta_pessoa_idx on contacts(account_id, ig_user_id);
+
+-- Só pode existir 1 execução de fluxo em andamento por pessoa, por fluxo.
+create unique index if not exists flow_runs_fluxo_pessoa_idx on flow_runs(flow_id, ig_user_id);
 `;
 
 async function ensureSchema(): Promise<void> {
@@ -200,4 +204,31 @@ export async function getContaPorIgUserId(
 
 export async function desconectarConta(id: number): Promise<void> {
   await query("delete from ig_accounts where id = $1", [id]);
+}
+
+export type FlowRow = {
+  id: number;
+  nome: string;
+  gatilho_palavra: string | null;
+  grafo: unknown;
+  ativo: boolean;
+  created_at: string;
+};
+
+export async function listarFluxos(accountId: number): Promise<FlowRow[]> {
+  return query<FlowRow>(
+    "select * from flows where account_id = $1 order by created_at desc",
+    [accountId]
+  );
+}
+
+export async function getFluxo(
+  id: number,
+  accountId: number
+): Promise<FlowRow | null> {
+  const linhas = await query<FlowRow>(
+    "select * from flows where id = $1 and account_id = $2",
+    [id, accountId]
+  );
+  return linhas[0] ?? null;
 }

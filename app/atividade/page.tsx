@@ -2,6 +2,9 @@ import Sidebar from "@/components/Sidebar";
 import { isDatabaseConfigured, query } from "@/lib/db";
 import { getContaAtiva } from "@/lib/active-account";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type Evento = {
   tipo: string;
   username: string | null;
