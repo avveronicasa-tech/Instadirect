@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSetting, getContaPorIgUserId, query, type ContaInstagram } from "@/lib/db";
 import { verifySignature } from "@/lib/webhook-signature";
 import { replyToComment, sendMessage } from "@/lib/meta";
-import { avancarFluxo, encontrarProximoPorOpcao } from "@/lib/flow-engine";
+import { avancarFluxo } from "@/lib/flow-engine";
 import type { FlowGraph, FlowNode } from "@/lib/flow-types";
+import type { FlowRow } from "@/lib/db";
 
 function logErro(contexto: string) {
   return (e: unknown) => console.error(contexto, e);
@@ -27,8 +28,6 @@ export async function GET(req: NextRequest) {
 }
 
 // Toda vez que alguém comenta ou manda DM, a Meta faz um POST aqui.
-// O mesmo webhook recebe eventos de TODAS as contas conectadas — por isso
-// o primeiro passo é sempre descobrir de qual conta veio o evento.
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const appSecret = await getSetting("ig_app_secret");
@@ -39,9 +38,7 @@ export async function POST(req: NextRequest) {
       rawBody,
       signatureHeader: req.headers.get("x-hub-signature-256"),
     });
-    if (!valido) {
-      return new NextResponse("Assinatura inválida", { status: 401 });
-    }
+    if (!valido) return new NextResponse("Assinatura inválida", { status: 401 });
   }
 
   const payload = JSON.parse(rawBody);
@@ -52,17 +49,12 @@ export async function POST(req: NextRequest) {
 
     try {
       for (const change of entry.changes ?? []) {
-        if (change.field === "comments") {
-          await tratarComentario(change.value, conta);
-        }
+        if (change.field === "comments") await tratarComentario(change.value, conta);
       }
       for (const evento of entry.messaging ?? []) {
-        if (evento.message?.text) {
-          await tratarMensagemDireta(evento, conta);
-        }
+        if (evento.message?.text) await tratarMensagemDireta(evento, conta);
       }
     } catch (e) {
-      // Um erro num evento não pode derrubar o webhook (a Meta reenviaria).
       console.error("Erro ao tratar evento do webhook:", e);
     }
   }
@@ -70,7 +62,29 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-type FluxoRow = { id: number; grafo: FlowGraph };
+function bate(texto: string, keywords: string[], matchType: string): boolean {
+  const t = texto.toLowerCase();
+  return keywords.some((k) =>
+    matchType === "exact" ? t.trim() === k.toLowerCase() : t.includes(k.toLowerCase())
+  );
+}
+
+function sortear<T>(lista: T[]): T | undefined {
+  if (lista.length === 0) return undefined;
+  return lista[Math.floor(Math.random() * lista.length)];
+}
+
+async function buscarFluxo(
+  contaId: number,
+  gatilho: "comment" | "story_reply" | "dm",
+  texto: string
+): Promise<FlowRow | undefined> {
+  const fluxos = await query<FlowRow>(
+    "select * from flows where ativo = true and account_id = $1 and trigger = $2",
+    [contaId, gatilho]
+  );
+  return fluxos.find((f) => bate(texto, f.keywords, f.match_type));
+}
 
 async function buscarFlowRunPendente(contaId: number, igUserId: string) {
   const linhas = await query<{
@@ -80,59 +94,27 @@ async function buscarFlowRunPendente(contaId: number, igUserId: string) {
     grafo: FlowGraph;
   }>(
     `select fr.flow_id, fr.no_atual, fr.atualizado_em, f.grafo
-     from flow_runs fr
-     join flows f on f.id = fr.flow_id
-     where fr.account_id = $1 and fr.ig_user_id = $2
-     limit 1`,
+     from flow_runs fr join flows f on f.id = fr.flow_id
+     where fr.account_id = $1 and fr.ig_user_id = $2 limit 1`,
     [contaId, igUserId]
   );
-  const linha = linhas[0];
-  if (!linha) return null;
-  return {
-    flowId: linha.flow_id,
-    grafo: linha.grafo,
-    noAtual: linha.no_atual,
-    atualizadoEm: linha.atualizado_em,
-  };
+  return linhas[0] ?? null;
 }
 
-async function buscarFluxoPorPalavra(
-  contaId: number,
-  texto: string
-): Promise<FluxoRow | null> {
-  const fluxos = await query<{ id: number; gatilho_palavra: string; grafo: FlowGraph }>(
-    "select id, gatilho_palavra, grafo from flows where ativo = true and account_id = $1 and gatilho_palavra is not null and gatilho_palavra <> ''",
-    [contaId]
-  );
-  const encontrado = fluxos.find((f) =>
-    texto.toLowerCase().includes(f.gatilho_palavra.toLowerCase())
-  );
-  return encontrado ? { id: encontrado.id, grafo: encontrado.grafo } : null;
-}
-
-type Automacao = {
-  id: number;
-  palavra_chave: string;
-  tipo_correspondencia: string;
-  dm_texto: string;
-  botao_texto: string | null;
-  botao_url: string | null;
-  responder_comentario: boolean;
-  comentario_texto: string | null;
-};
-
-async function buscarAutomacao(
-  contaId: number,
-  texto: string
-): Promise<Automacao | undefined> {
-  const automacoes = await query<Automacao>(
-    "select * from automations where ativa = true and account_id = $1",
-    [contaId]
-  );
-  const t = texto.toLowerCase();
-  return automacoes.find((a) => {
-    const chave = a.palavra_chave.toLowerCase();
-    return a.tipo_correspondencia === "exata" ? t.trim() === chave : t.includes(chave);
+async function iniciarFluxo(params: {
+  fluxo: FlowRow;
+  conta: ContaInstagram;
+  igUserId: string;
+  commentId?: string;
+}) {
+  const { fluxo, conta, igUserId, commentId } = params;
+  await avancarFluxo({
+    grafo: fluxo.grafo as FlowGraph,
+    flowId: fluxo.id,
+    conta,
+    igUserId,
+    entrada: { tipo: "iniciar" },
+    commentId,
   });
 }
 
@@ -143,11 +125,9 @@ async function tratarComentario(
   const texto = value.text || "";
   const autor = value.from;
   if (!texto || !autor) return;
-  // Ignora comentários da própria conta (ex: a nossa resposta pública),
-  // senão o sistema responderia a si mesmo em loop.
-  if (autor.id === conta.ig_user_id) return;
+  if (autor.id === conta.ig_user_id) return; // não reage à própria resposta
 
-  const fluxo = await buscarFluxoPorPalavra(conta.id, texto);
+  const fluxo = await buscarFluxo(conta.id, "comment", texto);
   const automacao = fluxo ? undefined : await buscarAutomacao(conta.id, texto);
   if (!fluxo && !automacao) return;
 
@@ -158,7 +138,6 @@ async function tratarComentario(
     [autor.id, autor.username ?? null, conta.id]
   );
 
-  // Fluxo tem prioridade sobre automação simples quando as duas batem.
   if (fluxo) {
     await query(
       `insert into events (tipo, ig_user_id, username, payload, account_id)
@@ -166,20 +145,14 @@ async function tratarComentario(
       [autor.id, autor.username ?? null, JSON.stringify(value), conta.id]
     );
     if (value.id) {
+      const resposta = sortear(fluxo.public_replies) || "Te mandei no privado! 📩";
       await replyToComment({
         accessToken: conta.access_token,
         commentId: value.id,
-        text: "Te mandei no privado! 📩",
+        text: resposta,
       }).catch(logErro("Falha ao responder o comentário:"));
     }
-    await avancarFluxo({
-      grafo: fluxo.grafo,
-      flowId: fluxo.id,
-      conta,
-      igUserId: autor.id,
-      entrada: { tipo: "inicio" },
-      commentId: value.id,
-    });
+    await iniciarFluxo({ fluxo, conta, igUserId: autor.id, commentId: value.id });
     return;
   }
 
@@ -199,7 +172,6 @@ async function tratarComentario(
     }).catch(logErro("Falha ao responder o comentário:"));
   }
 
-  // Resposta privada ao comentário (usa o ID do comentário, não o da pessoa).
   await sendMessage({
     accessToken: conta.access_token,
     igUserId: conta.ig_user_id,
@@ -211,10 +183,36 @@ async function tratarComentario(
   }).catch(logErro("Falha ao enviar a DM (resposta privada):"));
 }
 
+type Automacao = {
+  id: number;
+  palavra_chave: string;
+  tipo_correspondencia: string;
+  dm_texto: string;
+  botao_texto: string | null;
+  botao_url: string | null;
+  responder_comentario: boolean;
+  comentario_texto: string | null;
+};
+
+async function buscarAutomacao(contaId: number, texto: string): Promise<Automacao | undefined> {
+  const automacoes = await query<Automacao>(
+    "select * from automations where ativa = true and account_id = $1",
+    [contaId]
+  );
+  return automacoes.find((a) =>
+    bate(texto, [a.palavra_chave], a.tipo_correspondencia === "exata" ? "exact" : "contains")
+  );
+}
+
 async function tratarMensagemDireta(
   evento: {
     sender?: { id: string };
-    message?: { text?: string; is_echo?: boolean; quick_reply?: { payload?: string } };
+    message?: {
+      text?: string;
+      is_echo?: boolean;
+      quick_reply?: { payload?: string };
+      reply_to?: { story?: { id: string; url?: string } };
+    };
   },
   conta: ContaInstagram
 ) {
@@ -222,9 +220,9 @@ async function tratarMensagemDireta(
   const payloadBotao = evento.message?.quick_reply?.payload;
   const remetente = evento.sender?.id;
   if (!texto || !remetente) return;
-  // Ignora as mensagens que a própria conta enviou (eco), senão o sistema
-  // reagiria às próprias respostas em loop.
   if (evento.message?.is_echo || remetente === conta.ig_user_id) return;
+
+  const ehRespostaDeStory = Boolean(evento.message?.reply_to?.story);
 
   await query(
     `insert into contacts (ig_user_id, account_id)
@@ -233,74 +231,49 @@ async function tratarMensagemDireta(
     [remetente, conta.id]
   );
 
-  // 1) Já existe uma conversa de fluxo em andamento com essa pessoa?
+  // 1) Já existe um fluxo em andamento com essa pessoa?
   const pendente = await buscarFlowRunPendente(conta.id, remetente);
   if (pendente) {
-    const noAtual: FlowNode | undefined = pendente.grafo.nos[pendente.noAtual];
+    const grafo = pendente.grafo;
+    const no: FlowNode | undefined = grafo.nodes.find((n) => n.id === pendente.no_atual);
 
-    if (noAtual?.tipo === "esperar") {
-      const passouMs = Date.now() - new Date(pendente.atualizadoEm).getTime();
-      if (passouMs >= noAtual.minutos * 60 * 1000) {
+    if (no?.kind === "delay") {
+      const passouMs = Date.now() - new Date(pendente.atualizado_em).getTime();
+      if (passouMs >= no.minutes * 60 * 1000) {
         await avancarFluxo({
-          grafo: pendente.grafo,
-          flowId: pendente.flowId,
-          conta,
-          igUserId: remetente,
-          noAtualId: pendente.noAtual,
-          entrada: { tipo: "tempo_passou" },
+          grafo, flowId: pendente.flow_id, conta, igUserId: remetente,
+          noAtualId: pendente.no_atual, entrada: { tipo: "tempo_passou" },
         });
       }
       return;
     }
 
-    const proximo =
-      noAtual?.tipo === "mensagem"
-        ? encontrarProximoPorOpcao(noAtual, texto, payloadBotao)
-        : undefined;
-
-    if (proximo !== undefined) {
-      // proximo pode ser null (a opção termina o fluxo): o motor encerra.
-      await avancarFluxo({
-        grafo: pendente.grafo,
-        flowId: pendente.flowId,
-        conta,
-        igUserId: remetente,
-        noAtualId: proximo,
-        entrada: { tipo: "continuar" },
-      });
-    } else {
-      // Pode ser o e-mail esperado por um bloco "Pedir e-mail", ou uma
-      // resposta que não bateu com opção nenhuma (o motor pergunta de novo).
-      await avancarFluxo({
-        grafo: pendente.grafo,
-        flowId: pendente.flowId,
-        conta,
-        igUserId: remetente,
-        noAtualId: pendente.noAtual,
-        entrada: { tipo: "texto_livre", texto },
-      });
-    }
-    return;
-  }
-
-  // 2) Sem fluxo em andamento: essa mensagem inicia um fluxo ou uma automação?
-  const fluxo = await buscarFluxoPorPalavra(conta.id, texto);
-  if (fluxo) {
-    await query(
-      `insert into events (tipo, ig_user_id, payload, account_id)
-       values ('dm', $1, $2, $3)`,
-      [remetente, JSON.stringify(evento), conta.id]
-    );
     await avancarFluxo({
-      grafo: fluxo.grafo,
-      flowId: fluxo.id,
+      grafo,
+      flowId: pendente.flow_id,
       conta,
       igUserId: remetente,
-      entrada: { tipo: "inicio" },
+      noAtualId: pendente.no_atual,
+      entrada: { tipo: "resposta", texto, payload: payloadBotao },
     });
     return;
   }
 
+  // 2) Sem fluxo em andamento — essa mensagem dispara um fluxo novo?
+  const gatilho = ehRespostaDeStory ? "story_reply" : "dm";
+  const fluxo = await buscarFluxo(conta.id, gatilho, texto);
+  if (fluxo) {
+    await query(
+      `insert into events (tipo, ig_user_id, payload, account_id)
+       values ($1, $2, $3, $4)`,
+      [ehRespostaDeStory ? "story" : "dm", remetente, JSON.stringify(evento), conta.id]
+    );
+    await iniciarFluxo({ fluxo, conta, igUserId: remetente });
+    return;
+  }
+
+  // DM comum também pode disparar uma automação simples (mesmo se veio de
+  // resposta a story — automações simples não distinguem a origem ainda).
   const automacao = await buscarAutomacao(conta.id, texto);
   if (!automacao) return;
 
@@ -319,3 +292,4 @@ async function tratarMensagemDireta(
     buttonUrl: automacao.botao_url ?? undefined,
   }).catch(logErro("Falha ao enviar a DM:"));
 }
+

@@ -112,6 +112,16 @@ alter table events add column if not exists account_id int references ig_account
 alter table flows add column if not exists account_id int references ig_accounts(id) on delete cascade;
 alter table flow_runs add column if not exists account_id int references ig_accounts(id) on delete cascade;
 
+-- Campos do fluxo no mesmo formato do arquivo .json (compatível com o
+-- DirectPro original): gatilho, tipo de correspondência, palavras-chave e
+-- respostas públicas (roda uma aleatória a cada vez, pra não repetir sempre
+-- o mesmo texto no comentário).
+alter table flows add column if not exists trigger text default 'comment';
+alter table flows add column if not exists match_type text default 'contains';
+alter table flows add column if not exists keywords text[] default '{}';
+alter table flows add column if not exists public_replies text[] default '{}';
+alter table flows add column if not exists descricao text;
+
 -- O mesmo comentarista pode existir em contas diferentes, então o "único"
 -- passa a ser (conta + pessoa), não só a pessoa.
 alter table contacts drop constraint if exists contacts_ig_user_id_key;
@@ -209,7 +219,11 @@ export async function desconectarConta(id: number): Promise<void> {
 export type FlowRow = {
   id: number;
   nome: string;
-  gatilho_palavra: string | null;
+  descricao: string | null;
+  trigger: "comment" | "story_reply" | "dm";
+  match_type: "contains" | "exact";
+  keywords: string[];
+  public_replies: string[];
   grafo: unknown;
   ativo: boolean;
   created_at: string;

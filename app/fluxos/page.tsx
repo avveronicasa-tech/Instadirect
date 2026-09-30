@@ -3,13 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
-import { Plus, Trash2, Download, Upload, Workflow } from "lucide-react";
+import { Plus, Upload, Workflow, Download } from "lucide-react";
+import type { FlowGraph, Gatilho } from "@/lib/flow-types";
 
 type Fluxo = {
   id: number;
   nome: string;
-  gatilho_palavra: string | null;
+  trigger: Gatilho;
+  keywords: string[];
   ativo: boolean;
+  grafo: FlowGraph;
+};
+
+const rotuloGatilho: Record<Gatilho, string> = {
+  comment: "Comentário",
+  story_reply: "Resposta a story",
+  dm: "DM",
 };
 
 export default function FluxosPage() {
@@ -46,23 +55,64 @@ export default function FluxosPage() {
     carregar();
   }
 
-  async function exportar(id: number, nome: string) {
+  async function duplicar(id: number) {
+    await fetch(`/api/flows/${id}/duplicate`, { method: "POST" });
+    carregar();
+  }
+
+  async function exportarUm(id: number, nome: string) {
     const res = await fetch(`/api/flows/${id}`);
-    const fluxo = await res.json();
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          { nome: fluxo.nome, gatilho_palavra: fluxo.gatilho_palavra, grafo: fluxo.grafo },
-          null,
-          2
-        ),
-      ],
-      { type: "application/json" }
+    const f = await res.json();
+    baixarJson(
+      {
+        formato: 1,
+        fluxos: [
+          {
+            name: f.nome,
+            descricao: f.descricao,
+            trigger: f.trigger,
+            match_type: f.match_type,
+            keywords: f.keywords,
+            public_replies: f.public_replies,
+            nodes: f.grafo.nodes,
+            edges: f.grafo.edges,
+          },
+        ],
+      },
+      nome
     );
+  }
+
+  async function exportarTodos() {
+    const detalhes = await Promise.all(
+      fluxos.map((f) => fetch(`/api/flows/${f.id}`).then((r) => r.json()))
+    );
+    baixarJson(
+      {
+        formato: 1,
+        fluxos: detalhes.map((f) => ({
+          name: f.nome,
+          descricao: f.descricao,
+          trigger: f.trigger,
+          match_type: f.match_type,
+          keywords: f.keywords,
+          public_replies: f.public_replies,
+          nodes: f.grafo.nodes,
+          edges: f.grafo.edges,
+        })),
+      },
+      "todos-os-fluxos"
+    );
+  }
+
+  function baixarJson(conteudo: unknown, nomeArquivo: string) {
+    const blob = new Blob([JSON.stringify(conteudo, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${nome.toLowerCase().replace(/\s+/g, "-")}.json`;
+    a.download = `${nomeArquivo.toLowerCase().replace(/\s+/g, "-")}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -104,17 +154,23 @@ export default function FluxosPage() {
   return (
     <div className="flex">
       <Sidebar />
-      <main className="flex-1 px-10 py-8 max-w-[1000px]">
+      <main className="flex-1 px-10 py-8 max-w-[1100px]">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold">Fluxos</h1>
             <p className="text-gray-500 text-sm mt-1">
-              Conversas com caminhos diferentes, igual ao ManyChat. Quando um
-              fluxo e uma automação usam a mesma palavra-chave, o fluxo tem
-              prioridade.
+              Conversas com caminhos diferentes. Quando um fluxo e uma
+              automação usam a mesma palavra-chave, o fluxo tem prioridade.
             </p>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={exportarTodos}
+              disabled={fluxos.length === 0}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+            >
+              <Download size={16} /> Exportar todos
+            </button>
             <input
               ref={inputImportarRef}
               type="file"
@@ -131,7 +187,7 @@ export default function FluxosPage() {
             </label>
             <button
               onClick={criarNovo}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-brand-purple text-white rounded-lg hover:opacity-90"
             >
               <Plus size={16} /> Novo fluxo
             </button>
@@ -150,39 +206,46 @@ export default function FluxosPage() {
             {fluxos.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-5 py-4">
                 <Link href={`/fluxos/${f.id}`} className="flex-1">
-                  <p className="font-medium text-sm">{f.nome}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-sm">{f.nome}</p>
+                    <span
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                        f.ativo ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"
+                      }`}
+                    >
+                      {f.ativo ? "ativo" : "pausado"}
+                    </span>
+                  </div>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    {f.gatilho_palavra ? (
-                      <>
-                        Gatilho: <code>{f.gatilho_palavra}</code>
-                      </>
-                    ) : (
-                      "Sem palavra-chave definida ainda"
-                    )}
+                    {rotuloGatilho[f.trigger]}
+                    {f.keywords?.length > 0 ? ` · ${f.keywords.join(", ")}` : ""} ·{" "}
+                    {f.grafo?.nodes?.length ?? 0} blocos
                   </p>
                 </Link>
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={f.ativo}
-                      onChange={(e) => alternarAtivo(f.id, e.target.checked)}
-                    />
-                    {f.ativo ? "Ativo" : "Pausado"}
-                  </label>
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => exportar(f.id, f.nome)}
-                    className="p-2 text-gray-400 hover:text-gray-700"
-                    title="Exportar"
+                    onClick={() => alternarAtivo(f.id, !f.ativo)}
+                    className="text-xs font-medium border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
                   >
-                    <Download size={16} />
+                    {f.ativo ? "Pausar" : "Ativar"}
+                  </button>
+                  <button
+                    onClick={() => exportarUm(f.id, f.nome)}
+                    className="text-xs font-medium border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+                  >
+                    Exportar
+                  </button>
+                  <button
+                    onClick={() => duplicar(f.id)}
+                    className="text-xs font-medium border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+                  >
+                    Duplicar
                   </button>
                   <button
                     onClick={() => excluir(f.id)}
-                    className="p-2 text-gray-400 hover:text-red-600"
-                    title="Excluir"
+                    className="text-xs font-medium border border-red-200 text-red-600 rounded-lg px-3 py-1.5 hover:bg-red-50"
                   >
-                    <Trash2 size={16} />
+                    Apagar
                   </button>
                 </div>
               </div>

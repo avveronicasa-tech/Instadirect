@@ -1,24 +1,43 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useCallback, useEffect, useMemo, useState, use } from "react";
 import Link from "next/link";
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  addEdge,
+  useNodesState,
+  useEdgesState,
+  type Connection,
+  type Edge,
+  type Node,
+  type ReactFlowInstance,
+} from "reactflow";
+import "reactflow/dist/style.css";
 import Sidebar from "@/components/Sidebar";
-import { ArrowLeft, Plus, Trash2, MessageSquare, Clock, Mail, Tag } from "lucide-react";
+import { tiposDeNo, type FlowNodeData } from "@/components/flow/nodes";
+import { organizarLayout } from "@/lib/flow-layout";
 import {
-  type FlowGraph,
-  type FlowNode,
-  type OpcaoResposta,
-  grafoVazio,
+  novoBloco,
   novoId,
-  rotuloTipo,
+  rotuloBloco,
+  type FlowNode,
+  type FlowGraph,
+  type Gatilho,
+  type TipoCorrespondencia,
 } from "@/lib/flow-types";
+import {
+  ArrowLeft,
+  MessageSquare,
+  UserPlus,
+  Tag,
+  Mail,
+  Clock,
+  LayoutGrid,
+} from "lucide-react";
 
-const ICONES: Record<FlowNode["tipo"], typeof MessageSquare> = {
-  mensagem: MessageSquare,
-  esperar: Clock,
-  pedir_email: Mail,
-  etiquetar: Tag,
-};
+const nodeTypes = tiposDeNo;
 
 export default function EditorFluxoPage({
   params,
@@ -26,97 +45,157 @@ export default function EditorFluxoPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+
   const [nome, setNome] = useState("");
-  const [gatilho, setGatilho] = useState("");
+  const [descricao, setDescricao] = useState("");
+  const [trigger, setTrigger] = useState<Gatilho>("comment");
+  const [matchType, setMatchType] = useState<TipoCorrespondencia>("contains");
+  const [keywordsTexto, setKeywordsTexto] = useState("");
+  const [repliesTexto, setRepliesTexto] = useState("");
   const [ativo, setAtivo] = useState(false);
-  const [grafo, setGrafo] = useState<FlowGraph>(grafoVazio);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
-  const [mensagemSalvo, setMensagemSalvo] = useState<string | null>(null);
+  const [mensagem, setMensagem] = useState<string | null>(null);
+  const [rf, setRf] = useState<ReactFlowInstance | null>(null);
+
+  const criarCallbacksNo = useCallback(
+    (nodeId: string) => ({
+      onMudar: (patch: Partial<FlowNode>) =>
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? { ...n, data: { ...n.data, no: { ...n.data.no, ...patch } as FlowNode } }
+              : n
+          )
+        ),
+      onExcluir: () => {
+        setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+        setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      },
+    }),
+    [setNodes, setEdges]
+  );
 
   useEffect(() => {
     fetch(`/api/flows/${id}`)
       .then((r) => r.json())
       .then((f) => {
         setNome(f.nome);
-        setGatilho(f.gatilho_palavra || "");
+        setDescricao(f.descricao || "");
+        setTrigger(f.trigger || "comment");
+        setMatchType(f.match_type || "contains");
+        setKeywordsTexto((f.keywords || []).join(", "));
+        setRepliesTexto((f.public_replies || []).join("\n"));
         setAtivo(f.ativo);
-        setGrafo(f.grafo && f.grafo.nos ? f.grafo : grafoVazio);
+
+        const grafo: FlowGraph =
+          f.grafo?.nodes?.length > 0
+            ? f.grafo
+            : { nodes: [{ id: "start", kind: "start", x: 60, y: 145 }], edges: [] };
+
+        const rfNodes: Node<FlowNodeData>[] = grafo.nodes.map((no) => ({
+          id: no.id,
+          type: no.kind,
+          position: { x: no.x, y: no.y },
+          data: { no, ...criarCallbacksNo(no.id) },
+          deletable: no.kind !== "start",
+        }));
+
+        const rfEdges: Edge[] = grafo.edges.map((a) => ({
+          id: `${a.from}::${a.handle}::${a.to}`,
+          source: a.from,
+          sourceHandle: a.handle,
+          target: a.to,
+          style: { stroke: "#7C4DFF", strokeWidth: 1.5 },
+        }));
+
+        setNodes(rfNodes);
+        setEdges(rfEdges);
       })
       .finally(() => setCarregando(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  function atualizarNo(noId: string, patch: Partial<FlowNode>) {
-    setGrafo((g) => ({
-      ...g,
-      nos: { ...g.nos, [noId]: { ...g.nos[noId], ...patch } as FlowNode },
-    }));
+  const onConnect = useCallback(
+    (conn: Connection) => {
+      setEdges((eds) =>
+        addEdge(
+          { ...conn, style: { stroke: "#7C4DFF", strokeWidth: 1.5 } },
+          // Cada saída (handle) só pode ir pra 1 lugar — remove a ligação
+          // antiga dessa mesma saída antes de adicionar a nova.
+          eds.filter(
+            (e) => !(e.source === conn.source && e.sourceHandle === conn.sourceHandle)
+          )
+        )
+      );
+    },
+    [setEdges]
+  );
+
+  function adicionarBloco(kind: Exclude<FlowNode["kind"], "start">) {
+    const x = Math.max(0, ...nodes.map((n) => n.position.x)) + 320;
+    const y = 140;
+    const no = novoBloco(kind, x, y);
+    setNodes((nds) => [
+      ...nds,
+      { id: no.id, type: no.kind, position: { x, y }, data: { no, ...criarCallbacksNo(no.id) } },
+    ]);
   }
 
-  function adicionarNo(tipo: FlowNode["tipo"]) {
-    const id2 = novoId();
-    let no: FlowNode;
-    switch (tipo) {
-      case "mensagem":
-        no = { id: id2, tipo, texto: "", opcoes: [], proximo: null };
-        break;
-      case "esperar":
-        no = { id: id2, tipo, minutos: 60, proximo: null };
-        break;
-      case "pedir_email":
-        no = { id: id2, tipo, texto: "Qual o seu e-mail?", proximo: null };
-        break;
-      case "etiquetar":
-        no = { id: id2, tipo, etiqueta: "", proximo: null };
-        break;
-    }
-    setGrafo((g) => ({
-      inicio: g.inicio ?? id2,
-      nos: { ...g.nos, [id2]: no },
-    }));
-  }
-
-  function excluirNo(noId: string) {
-    if (!confirm("Excluir esse bloco?")) return;
-    setGrafo((g) => {
-      const nos = { ...g.nos };
-      delete nos[noId];
-      // Remove ligações que apontavam pra esse nó.
-      for (const key of Object.keys(nos)) {
-        const n = nos[key];
-        if ("proximo" in n && n.proximo === noId) n.proximo = null;
-        if (n.tipo === "mensagem") {
-          n.opcoes = n.opcoes.map((o) =>
-            o.proximo === noId ? { ...o, proximo: null } : o
-          );
-        }
-      }
-      return {
-        inicio: g.inicio === noId ? null : g.inicio,
-        nos,
-      };
-    });
+  function organizar() {
+    setNodes((nds) => organizarLayout(nds, edges));
+    setTimeout(() => rf?.fitView({ padding: 0.2 }), 50);
   }
 
   async function salvar() {
     setSalvando(true);
-    setMensagemSalvo(null);
+    setMensagem(null);
+
+    const grafo: FlowGraph = {
+      nodes: nodes.map((n) => ({
+        ...(n.data.no as FlowNode),
+        x: n.position.x,
+        y: n.position.y,
+      })),
+      edges: edges.map((e) => ({
+        from: e.source,
+        handle: e.sourceHandle || "next",
+        to: e.target,
+      })),
+    };
+
     const res = await fetch(`/api/flows/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         nome,
-        gatilho_palavra: gatilho || null,
+        descricao,
+        trigger,
+        match_type: matchType,
+        keywords: keywordsTexto.split(",").map((k) => k.trim()).filter(Boolean),
+        public_replies: repliesTexto.split("\n").map((r) => r.trim()).filter(Boolean),
         grafo,
         ativo,
       }),
     });
+
     setSalvando(false);
-    setMensagemSalvo(res.ok ? "Salvo!" : "Erro ao salvar.");
-    setTimeout(() => setMensagemSalvo(null), 2000);
+    setMensagem(res.ok ? "Salvo!" : "Erro ao salvar.");
+    setTimeout(() => setMensagem(null), 2000);
   }
 
-  const listaNos = Object.values(grafo.nos);
+  const gatilhos: { valor: Gatilho; label: string }[] = useMemo(
+    () => [
+      { valor: "comment", label: "Comentário em post/reels" },
+      { valor: "story_reply", label: "Resposta a story" },
+      { valor: "dm", label: "DM recebida" },
+    ],
+    []
+  );
 
   if (carregando) {
     return (
@@ -130,362 +209,152 @@ export default function EditorFluxoPage({
   }
 
   return (
-    <div className="flex">
+    <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 px-10 py-8 max-w-[900px]">
-        <Link
-          href="/fluxos"
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 mb-4"
-        >
-          <ArrowLeft size={15} /> Voltar pra Fluxos
-        </Link>
-
+      <div className="flex-1 flex flex-col">
         {/* Cabeçalho */}
-        <div className="card p-5 mb-5 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Nome do fluxo
-              </label>
-              <input
-                value={nome}
-                onChange={(e) => setNome(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Palavra-chave que dispara o fluxo
-              </label>
-              <input
-                value={gatilho}
-                onChange={(e) => setGatilho(e.target.value)}
-                placeholder="Ex: aula"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-            </div>
-          </div>
-          <p className="text-xs text-gray-400">
-            Dica: se o fluxo começa por um comentário, a Meta só deixa mandar 1
-            mensagem antes de a pessoa responder. Por isso o primeiro bloco
-            deve ter opções de resposta (botões): quando a pessoa toca, o resto
-            do fluxo continua.
-          </p>
-          <div className="flex items-center justify-between pt-1">
-            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={ativo}
-                onChange={(e) => setAtivo(e.target.checked)}
-              />
-              Fluxo ativo
-            </label>
-            <div className="flex items-center gap-3">
-              {mensagemSalvo && (
-                <span className="text-xs text-emerald-600">{mensagemSalvo}</span>
-              )}
-              <button
-                onClick={salvar}
-                disabled={salvando}
-                className="px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
-              >
-                {salvando ? "Salvando..." : "Salvar"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Blocos */}
-        {listaNos.length === 0 ? (
-          <div className="card p-10 text-center text-sm text-gray-400 mb-5">
-            Nenhum bloco ainda. Adicione o primeiro abaixo.
-          </div>
-        ) : (
-          <div className="space-y-3 mb-5">
-            {listaNos.map((no) => (
-              <BlocoNo
-                key={no.id}
-                no={no}
-                grafo={grafo}
-                ehInicio={grafo.inicio === no.id}
-                onMudar={(patch) => atualizarNo(no.id, patch)}
-                onExcluir={() => excluirNo(no.id)}
-                onDefinirInicio={() =>
-                  setGrafo((g) => ({ ...g, inicio: no.id }))
-                }
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Adicionar bloco */}
-        <div className="card p-4">
-          <p className="text-xs font-medium text-gray-500 mb-2">
-            Adicionar bloco
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <BotaoAdicionar tipo="mensagem" onClick={adicionarNo} />
-            <BotaoAdicionar tipo="esperar" onClick={adicionarNo} />
-            <BotaoAdicionar tipo="pedir_email" onClick={adicionarNo} />
-            <BotaoAdicionar tipo="etiquetar" onClick={adicionarNo} />
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-function BotaoAdicionar({
-  tipo,
-  onClick,
-}: {
-  tipo: FlowNode["tipo"];
-  onClick: (tipo: FlowNode["tipo"]) => void;
-}) {
-  const Icon = ICONES[tipo];
-  return (
-    <button
-      onClick={() => onClick(tipo)}
-      className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-    >
-      <Plus size={14} className="text-gray-400" />
-      <Icon size={15} />
-      {rotuloTipo(tipo)}
-    </button>
-  );
-}
-
-function SeletorProximo({
-  valor,
-  grafo,
-  noIdAtual,
-  onMudar,
-}: {
-  valor: string | null;
-  grafo: FlowGraph;
-  noIdAtual: string;
-  onMudar: (v: string | null) => void;
-}) {
-  return (
-    <select
-      value={valor ?? ""}
-      onChange={(e) => onMudar(e.target.value || null)}
-      className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
-    >
-      <option value="">Fim do fluxo</option>
-      {Object.values(grafo.nos)
-        .filter((n) => n.id !== noIdAtual)
-        .map((n) => (
-          <option key={n.id} value={n.id}>
-            {rotuloTipo(n.tipo)}
-            {"texto" in n && n.texto ? `: ${n.texto.slice(0, 20)}` : ""}
-          </option>
-        ))}
-    </select>
-  );
-}
-
-function BlocoNo({
-  no,
-  grafo,
-  ehInicio,
-  onMudar,
-  onExcluir,
-  onDefinirInicio,
-}: {
-  no: FlowNode;
-  grafo: FlowGraph;
-  ehInicio: boolean;
-  onMudar: (patch: Partial<FlowNode>) => void;
-  onExcluir: () => void;
-  onDefinirInicio: () => void;
-}) {
-  const Icon = ICONES[no.tipo];
-
-  return (
-    <div className={`card p-4 ${ehInicio ? "ring-2 ring-brand-purple" : ""}`}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="w-7 h-7 rounded-lg bg-purple-50 text-brand-purple flex items-center justify-center">
-            <Icon size={15} />
-          </span>
-          <span className="text-sm font-medium">{rotuloTipo(no.tipo)}</span>
-          {ehInicio && (
-            <span className="text-[10px] font-medium bg-brand-purple text-white px-2 py-0.5 rounded-full">
-              início
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {!ehInicio && (
-            <button
-              onClick={onDefinirInicio}
-              className="text-xs text-gray-400 hover:text-brand-purple"
-            >
-              Definir como início
-            </button>
-          )}
+        <div className="border-b border-gray-100 px-6 py-3 flex items-center gap-4">
+          <Link href="/fluxos" className="text-gray-400 hover:text-gray-700">
+            <ArrowLeft size={18} />
+          </Link>
+          <input
+            value={nome}
+            onChange={(e) => setNome(e.target.value)}
+            className="font-semibold text-sm border-none focus:outline-none focus:ring-0 px-0"
+          />
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+            <input type="checkbox" checked={ativo} onChange={(e) => setAtivo(e.target.checked)} />
+            Ativo
+          </label>
+          <div className="flex-1" />
+          {mensagem && <span className="text-xs text-emerald-600">{mensagem}</span>}
           <button
-            onClick={onExcluir}
-            className="p-1.5 text-gray-400 hover:text-red-600"
+            onClick={salvar}
+            disabled={salvando}
+            className="px-4 py-1.5 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
           >
-            <Trash2 size={14} />
+            {salvando ? "Salvando..." : "Salvar fluxo"}
           </button>
         </div>
-      </div>
 
-      {no.tipo === "mensagem" && (
-        <div className="space-y-2">
-          <textarea
-            value={no.texto}
-            onChange={(e) => onMudar({ texto: e.target.value })}
-            placeholder="Texto da mensagem"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            rows={2}
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              value={no.botaoTexto || ""}
-              onChange={(e) => onMudar({ botaoTexto: e.target.value })}
-              placeholder="Texto do botão (opcional)"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-xs"
-            />
-            <input
-              value={no.botaoUrl || ""}
-              onChange={(e) => onMudar({ botaoUrl: e.target.value })}
-              placeholder="Link do botão"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-xs"
-            />
-          </div>
-
-          <div className="pt-1">
-            <p className="text-xs font-medium text-gray-500 mb-1.5">
-              Opções de resposta (botões clicáveis — a pessoa toca, não
-              precisa digitar. Máx. 13 opções, 20 caracteres cada)
-            </p>
-            {no.opcoes.map((op: OpcaoResposta, i: number) => (
-              <div key={op.id} className="flex items-center gap-2 mb-1.5">
-                <span className="text-xs text-gray-400 w-4">{i + 1}.</span>
-                <input
-                  value={op.texto}
-                  onChange={(e) => {
-                    const novas = [...no.opcoes];
-                    novas[i] = { ...op, texto: e.target.value };
-                    onMudar({ opcoes: novas });
-                  }}
-                  placeholder="Texto da opção"
-                  className="flex-1 border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
-                />
-                <span className="text-xs text-gray-400">vai para</span>
-                <SeletorProximo
-                  valor={op.proximo}
-                  grafo={grafo}
-                  noIdAtual={no.id}
-                  onMudar={(v) => {
-                    const novas = [...no.opcoes];
-                    novas[i] = { ...op, proximo: v };
-                    onMudar({ opcoes: novas });
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    const novas = no.opcoes.filter((o) => o.id !== op.id);
-                    onMudar({ opcoes: novas });
-                  }}
-                  className="p-1 text-gray-400 hover:text-red-600"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={() =>
-                onMudar({
-                  opcoes: [
-                    ...no.opcoes,
-                    { id: novoId(), texto: "", proximo: null },
-                  ],
-                })
-              }
-              className="text-xs text-brand-purple hover:underline"
+        {/* Gatilho */}
+        <div className="border-b border-gray-100 px-6 py-3 grid grid-cols-3 gap-4 bg-gray-50/50">
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">
+              Gatilho
+            </label>
+            <select
+              value={trigger}
+              onChange={(e) => setTrigger(e.target.value as Gatilho)}
+              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
             >
-              + Adicionar opção
-            </button>
+              {gatilhos.map((g) => (
+                <option key={g.valor} value={g.valor}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
           </div>
-
-          {no.opcoes.length === 0 && (
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-xs text-gray-400">
-                Sem opções, segue direto pra:
-              </span>
-              <SeletorProximo
-                valor={no.proximo}
-                grafo={grafo}
-                noIdAtual={no.id}
-                onMudar={(v) => onMudar({ proximo: v })}
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">
+              Palavras-chave (separadas por vírgula)
+            </label>
+            <input
+              value={keywordsTexto}
+              onChange={(e) => setKeywordsTexto(e.target.value)}
+              placeholder="quero, eu quero, link"
+              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">
+              Tipo de correspondência
+            </label>
+            <select
+              value={matchType}
+              onChange={(e) => setMatchType(e.target.value as TipoCorrespondencia)}
+              className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
+            >
+              <option value="contains">Se contiver a palavra</option>
+              <option value="exact">Só se for igual</option>
+            </select>
+          </div>
+          {trigger === "comment" && (
+            <div className="col-span-3">
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">
+                Respostas públicas no comentário (uma por linha — sorteia uma a cada vez)
+              </label>
+              <textarea
+                value={repliesTexto}
+                onChange={(e) => setRepliesTexto(e.target.value)}
+                rows={2}
+                placeholder={"Te mandei no direto! 📩\nJá está no seu direct 👀"}
+                className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-xs"
               />
             </div>
           )}
         </div>
-      )}
 
-      {no.tipo === "esperar" && (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-600">Esperar</span>
-          <input
-            type="number"
-            min={1}
-            value={no.minutos}
-            onChange={(e) => onMudar({ minutos: Number(e.target.value) })}
-            className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-          />
-          <span className="text-sm text-gray-600">minutos, depois:</span>
-          <SeletorProximo
-            valor={no.proximo}
-            grafo={grafo}
-            noIdAtual={no.id}
-            onMudar={(v) => onMudar({ proximo: v })}
-          />
+        {/* Toolbar de blocos */}
+        <div className="border-b border-gray-100 px-6 py-2 flex items-center gap-2">
+          <BotaoBloco icon={MessageSquare} label="Enviar mensagem" onClick={() => adicionarBloco("message")} />
+          <BotaoBloco icon={Clock} label="Esperar" onClick={() => adicionarBloco("delay")} />
+          <BotaoBloco icon={Mail} label="Pedir e-mail" onClick={() => adicionarBloco("ask_email")} />
+          <BotaoBloco icon={UserPlus} label="Só para quem segue" onClick={() => adicionarBloco("follow_gate")} />
+          <BotaoBloco icon={Tag} label="Etiquetar" onClick={() => adicionarBloco("tag")} />
+          <div className="flex-1" />
+          <button
+            onClick={organizar}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            <LayoutGrid size={13} /> Organizar
+          </button>
         </div>
-      )}
 
-      {no.tipo === "pedir_email" && (
-        <div className="space-y-2">
-          <input
-            value={no.texto}
-            onChange={(e) => onMudar({ texto: e.target.value })}
-            placeholder="Pergunta pra pedir o e-mail"
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          />
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">Depois de receber, vai para:</span>
-            <SeletorProximo
-              valor={no.proximo}
-              grafo={grafo}
-              noIdAtual={no.id}
-              onMudar={(v) => onMudar({ proximo: v })}
-            />
-          </div>
+        {/* Canvas */}
+        <div className="flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onInit={setRf}
+            nodeTypes={nodeTypes}
+            fitView
+            minZoom={0.2}
+            maxZoom={1.5}
+          >
+            <Background gap={20} color="#eee" />
+            <Controls />
+            <MiniMap pannable zoomable className="!bg-white" />
+          </ReactFlow>
         </div>
-      )}
 
-      {no.tipo === "etiquetar" && (
-        <div className="flex items-center gap-2">
-          <input
-            value={no.etiqueta}
-            onChange={(e) => onMudar({ etiqueta: e.target.value })}
-            placeholder="Nome da etiqueta"
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          />
-          <span className="text-xs text-gray-400">depois:</span>
-          <SeletorProximo
-            valor={no.proximo}
-            grafo={grafo}
-            noIdAtual={no.id}
-            onMudar={(v) => onMudar({ proximo: v })}
-          />
-        </div>
-      )}
+        <p className="px-6 py-1.5 text-[11px] text-gray-400 border-t border-gray-100">
+          Arraste da bolinha até outro bloco para ligar · Ctrl/Cmd + rolar amplia · clique e
+          arraste o fundo pra navegar
+        </p>
+      </div>
     </div>
+  );
+}
+
+function BotaoBloco({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: typeof MessageSquare;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50"
+    >
+      <Icon size={13} /> {label}
+    </button>
   );
 }

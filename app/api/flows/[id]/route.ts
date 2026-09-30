@@ -34,9 +34,27 @@ export async function PATCH(
     campos.push(`nome = $${i++}`);
     valores.push(body.nome);
   }
-  if (body.gatilho_palavra !== undefined) {
-    campos.push(`gatilho_palavra = $${i++}`);
-    valores.push(body.gatilho_palavra || null);
+  if (typeof body.descricao === "string") {
+    campos.push(`descricao = $${i++}`);
+    valores.push(body.descricao || null);
+  }
+  if (["comment", "story_reply", "dm"].includes(body.trigger)) {
+    campos.push(`trigger = $${i++}`);
+    valores.push(body.trigger);
+  }
+  if (["contains", "exact"].includes(body.match_type)) {
+    campos.push(`match_type = $${i++}`);
+    valores.push(body.match_type);
+  }
+  if (Array.isArray(body.keywords)) {
+    campos.push(`keywords = $${i++}`);
+    valores.push(body.keywords.filter((k: unknown) => typeof k === "string" && k.trim()));
+  }
+  if (Array.isArray(body.public_replies)) {
+    campos.push(`public_replies = $${i++}`);
+    valores.push(
+      body.public_replies.filter((k: unknown) => typeof k === "string" && k.trim())
+    );
   }
   if (body.grafo !== undefined) {
     campos.push(`grafo = $${i++}`);

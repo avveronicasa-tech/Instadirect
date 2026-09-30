@@ -22,11 +22,11 @@ export async function GET() {
   let resolvidos = 0;
 
   for (const p of pendentes) {
-    const no = p.grafo.nos[p.no_atual];
-    if (!no || no.tipo !== "esperar") continue;
+    const no = p.grafo.nodes.find((n) => n.id === p.no_atual);
+    if (!no || no.kind !== "delay") continue;
 
     const passouMs = Date.now() - new Date(p.atualizado_em).getTime();
-    if (passouMs < no.minutos * 60 * 1000) continue;
+    if (passouMs < no.minutes * 60 * 1000) continue;
 
     const [conta] = await query<ContaInstagram>(
       "select * from ig_accounts where id = $1",

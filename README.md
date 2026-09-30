@@ -21,21 +21,28 @@ usando a API oficial da Meta. Rodando na sua própria conta Vercel + Neon.
 - Cron diário que renova o token de todas as contas conectadas.
 - **Automações** (`/automacoes`): criar, ativar/pausar e excluir — sempre
   na conta ativa.
-- **Fluxos** (`/fluxos`): editor de conversas com caminhos diferentes.
-  - Blocos: Enviar mensagem (com opções de resposta), Esperar, Pedir e-mail,
-    Etiquetar.
-  - Cada opção de uma mensagem tem seu próprio "vai para", escolhendo
-    qualquer outro bloco do fluxo — é assim que a conversa se ramifica.
-  - Import/export em `.json` (um fluxo, uma lista, ou um pacote inteiro).
+- **Fluxos** (`/fluxos`): editor visual de verdade (canvas com React Flow) —
+  arrasta blocos, liga puxando uma linha da bolinha até outro bloco, zoom,
+  pan, botão "Organizar" pra auto-arrumar.
+  - Blocos: Enviar mensagem (com botões clicáveis de verdade — quick
+    replies — ou um único botão de link), Esperar, Pedir e-mail, Só para
+    quem segue, Etiquetar.
+  - 3 tipos de gatilho por fluxo: Comentário, Resposta a story, DM recebida
+    — com lista de palavras-chave e tipo de correspondência (contém/exata).
+  - Respostas públicas no comentário: uma lista, sorteando uma a cada vez
+    (pra não repetir sempre o mesmo texto).
+  - **Formato de arquivo `.json` compatível com o DirectPro original**
+    (`{ formato: 1, fluxos: [{ name, trigger, keywords, nodes, edges, ... }] }`).
+    Um fluxo exportado de um sistema importa certinho no outro.
+  - Botões: Ativar/Pausar, Exportar, Duplicar, Apagar — igual ao original.
   - Quando um fluxo e uma automação usam a mesma palavra-chave, o fluxo tem
-    prioridade (documentado no fluxo original do DirectPro).
+    prioridade.
+  - "Só para quem segue" é um bloco **honesto**: a API do Instagram não
+    permite verificar isso de verdade, então ele só pede e espera o toque
+    — não confere nada (documentado também na tela).
   - Nó "Esperar" é resolvido por um cron diário ou quando a pessoa manda
     outra mensagem — sem QStash, não sai na hora exata (mesma limitação
     documentada pro lembrete das automações simples).
-  - As "opções de resposta" hoje funcionam como texto: a pessoa responde
-    escrevendo o número ou o texto da opção, e o fluxo lê isso pra decidir
-    o caminho. (A API do Instagram tem um recurso de botões de resposta
-    rápida mais visual, que pode ser um upgrade futuro.)
 - **Contatos** e **Atividade**: mostram dados reais, filtrados pela conta
   ativa.
 - Páginas de Política de Privacidade e Termos (exigidas pela Meta).
@@ -49,11 +56,9 @@ usando a API oficial da Meta. Rodando na sua própria conta Vercel + Neon.
 - Fila com trava atômica (`FOR UPDATE SKIP LOCKED`) pra nunca enviar em
   dobro, como o DirectPro original faz.
 - Limite de envio (mensagens por segundo/hora) ainda não está aplicado.
-- Nó "Só para quem segue" dos Fluxos: a API do Instagram não permite
-  verificar isso de verdade (mesma limitação do DirectPro original), então
-  não foi incluído — só dá pra pedir isso na própria mensagem.
-- Botões de resposta rápida "de verdade" (visuais, não por texto digitado)
-  nos Fluxos.
+- Detecção de resposta a story: hoje reconhece pelo campo `reply_to.story`
+  que a Meta manda no evento — ainda não filtra por um story específico
+  (a palavra-chave vale pra resposta a qualquer story).
 
 ## Como publicar
 

@@ -21,10 +21,10 @@ export async function POST(req: NextRequest) {
 
   const { nome } = await req.json();
   const [fluxo] = await query(
-    `insert into flows (nome, gatilho_palavra, grafo, ativo, account_id)
-     values ($1, null, $2, false, $3)
+    `insert into flows (nome, trigger, match_type, keywords, public_replies, grafo, ativo, account_id)
+     values ($1, 'comment', 'contains', '{}', '{}', $2, false, $3)
      returning *`,
-    [nome || "Novo fluxo", JSON.stringify(grafoVazio), conta.id]
+    [nome || "Novo fluxo", JSON.stringify(grafoVazio()), conta.id]
   );
 
   return NextResponse.json(fluxo, { status: 201 });
