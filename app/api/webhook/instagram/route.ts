@@ -118,6 +118,33 @@ async function iniciarFluxo(params: {
   });
 }
 
+// Só bloqueia se for comentário da própria conta E o texto bater exatamente
+// com uma resposta que o robô mesmo poderia ter mandado — assim o dono da
+// conta ainda consegue testar comentando a palavra-chave no próprio post.
+async function pareceEcoDoBot(contaId: number, texto: string): Promise<boolean> {
+  const t = texto.trim().toLowerCase();
+  if (!t) return false;
+
+  const [fluxosReplies] = await query<{ respostas: string[] }>(
+    `select coalesce(array_agg(distinct r), '{}') as respostas
+     from flows, unnest(public_replies) as r
+     where account_id = $1`,
+    [contaId]
+  );
+  const [automacoesReplies] = await query<{ respostas: string[] }>(
+    `select coalesce(array_agg(distinct comentario_texto), '{}') as respostas
+     from automations
+     where account_id = $1 and comentario_texto is not null`,
+    [contaId]
+  );
+
+  const todas = [
+    ...(fluxosReplies?.respostas || []),
+    ...(automacoesReplies?.respostas || []),
+  ];
+  return todas.some((r) => r.trim().toLowerCase() === t);
+}
+
 async function tratarComentario(
   value: { text?: string; from?: { id: string; username?: string }; id?: string },
   conta: ContaInstagram
@@ -125,7 +152,11 @@ async function tratarComentario(
   const texto = value.text || "";
   const autor = value.from;
   if (!texto || !autor) return;
-  if (autor.id === conta.ig_user_id) return; // não reage à própria resposta
+
+  if (autor.id === conta.ig_user_id) {
+    const eco = await pareceEcoDoBot(conta.id, texto);
+    if (eco) return; // é mesmo uma resposta automática ecoando, ignora
+  }
 
   const fluxo = await buscarFluxo(conta.id, "comment", texto);
   const automacao = fluxo ? undefined : await buscarAutomacao(conta.id, texto);
@@ -220,7 +251,9 @@ async function tratarMensagemDireta(
   const payloadBotao = evento.message?.quick_reply?.payload;
   const remetente = evento.sender?.id;
   if (!texto || !remetente) return;
-  if (evento.message?.is_echo || remetente === conta.ig_user_id) return;
+  // "is_echo" é o campo oficial da Meta pra identificar mensagem que o
+  // próprio robô mandou — isso sim é seguro ignorar sempre.
+  if (evento.message?.is_echo) return;
 
   const ehRespostaDeStory = Boolean(evento.message?.reply_to?.story);
 
