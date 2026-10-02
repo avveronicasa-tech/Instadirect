@@ -47,9 +47,21 @@ usando a API oficial da Meta. Rodando na sua própria conta Vercel + Neon.
   ativa.
 - Páginas de Política de Privacidade e Termos (exigidas pela Meta).
 
+- **Disparos** (`/disparos`): envio manual de mensagem pra quem já
+  interagiu, igual ao DirectPro.
+  - Composer com inserir variável (`{{first_name}}`), botão de link
+    opcional e prévia ao vivo.
+  - Lista de contatos com busca, "Marcar todos" e o tempo que falta pra
+    fechar a janela de 24h de cada pessoa — quem está mais perto de
+    expirar aparece primeiro.
+  - Só envia pra quem ainda está dentro da janela de 24h (confere nessa
+    hora, não só na hora de listar) — quem expirou nesse meio-tempo é
+    avisado no resultado, não trava o envio dos outros.
+  - Limite de 150 destinatários por disparo, com uma pequena pausa entre
+    cada envio pra respeitar a taxa da Meta.
+
 ## O que ainda falta (próximas etapas)
 
-- **Disparos**: envio manual de mensagem pra quem já interagiu.
 - **Lembrete depois de X minutos das Automações simples** (diferente do nó
   "Esperar" dos Fluxos, que já funciona): a coluna já existe na tabela, mas
   ainda não foi ligada.

@@ -122,6 +122,11 @@ alter table flows add column if not exists keywords text[] default '{}';
 alter table flows add column if not exists public_replies text[] default '{}';
 alter table flows add column if not exists descricao text;
 
+-- Controla a janela de 24h da Meta: só dá pra mandar Disparo manual pra
+-- quem interagiu nas últimas 24h. Atualizado toda vez que a pessoa
+-- comenta, responde story ou manda DM.
+alter table contacts add column if not exists ultima_interacao_em timestamptz default now();
+
 -- O mesmo comentarista pode existir em contas diferentes, então o "único"
 -- passa a ser (conta + pessoa), não só a pessoa.
 alter table contacts drop constraint if exists contacts_ig_user_id_key;

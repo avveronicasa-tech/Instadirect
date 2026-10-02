@@ -163,9 +163,10 @@ async function tratarComentario(
   if (!fluxo && !automacao) return;
 
   await query(
-    `insert into contacts (ig_user_id, username, account_id)
-     values ($1, $2, $3)
-     on conflict (account_id, ig_user_id) do update set username = excluded.username`,
+    `insert into contacts (ig_user_id, username, account_id, ultima_interacao_em)
+     values ($1, $2, $3, now())
+     on conflict (account_id, ig_user_id) do update set
+       username = excluded.username, ultima_interacao_em = now()`,
     [autor.id, autor.username ?? null, conta.id]
   );
 
@@ -258,9 +259,9 @@ async function tratarMensagemDireta(
   const ehRespostaDeStory = Boolean(evento.message?.reply_to?.story);
 
   await query(
-    `insert into contacts (ig_user_id, account_id)
-     values ($1, $2)
-     on conflict (account_id, ig_user_id) do nothing`,
+    `insert into contacts (ig_user_id, account_id, ultima_interacao_em)
+     values ($1, $2, now())
+     on conflict (account_id, ig_user_id) do update set ultima_interacao_em = now()`,
     [remetente, conta.id]
   );
 
